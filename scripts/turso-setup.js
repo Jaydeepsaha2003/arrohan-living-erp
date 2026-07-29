@@ -9,6 +9,8 @@
  *   node scripts/turso-setup.js
  */
 
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 const { createClient } = require('@libsql/client');
 
 const url = process.env.TURSO_DATABASE_URL;

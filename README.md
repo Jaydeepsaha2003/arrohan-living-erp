@@ -387,14 +387,32 @@ the database and print correctly from then on.
 
 ### 8.6 Local development against the same Turso database
 
-Handy for testing before you push:
+Handy for testing before you push. Easiest way — copy the template and fill in your values:
+
+```bash
+cp .env.example .env
+```
+
+```
+TURSO_DATABASE_URL=libsql://arrohan-erp-<you>.turso.io
+TURSO_AUTH_TOKEN=<the token from step 8.1>
+```
+
+Then just `npm start` as normal — `.env` is loaded automatically and is git-ignored, so
+the token never gets committed. Delete `.env` (or leave both values blank) to go back to
+a local file in `data/` — the two never mix by accident.
+
+Prefer not to use a file? Setting the same two variables directly in your shell works
+identically and overrides anything in `.env`:
 
 ```bash
 TURSO_DATABASE_URL=libsql://arrohan-erp-<you>.turso.io TURSO_AUTH_TOKEN=<token> npm start
 ```
 
-Omit both variables (the normal `npm start`) and it uses a local file in `data/` instead
-— the two never mix by accident.
+> **Vercel itself never reads `.env`** — it isn't uploaded (it's git-ignored) and Vercel
+> doesn't look for one anyway. For the deployed app, the two variables must be set under
+> **Settings → Environment Variables** in the Vercel dashboard, as in §8.3. `.env` is only
+> for testing on your own machine.
 
 ### What doesn't apply on Vercel
 

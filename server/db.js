@@ -18,6 +18,13 @@
 
 const fs = require('fs');
 const path = require('path');
+
+// Loads a .env file in the project root if one exists — local convenience only.
+// Vercel injects its own environment variables directly and has no .env file
+// to load, so this is a no-op there (and dotenv silently does nothing if the
+// file is missing, so it's safe to always call).
+require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
+
 const { createClient } = require('@libsql/client');
 
 const DATA_DIR = process.env.ARROHAN_DATA_DIR || path.join(__dirname, '..', 'data');
