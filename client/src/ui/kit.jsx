@@ -70,15 +70,15 @@ export function Field({ label, required, hint, error, children, span }) {
   );
 }
 
-export function Input({ invalid, ...rest }) {
-  return <input className={`input ${invalid ? 'input-invalid' : ''}`} {...rest} />;
+export function Input({ invalid, className, ...rest }) {
+  return <input className={`input ${invalid ? 'input-invalid' : ''} ${className || ''}`} {...rest} />;
 }
 
-export function NumInput({ invalid, value, onChange, ...rest }) {
+export function NumInput({ invalid, value, onChange, className, ...rest }) {
   return (
     <input
       type="number"
-      className={`input num-input ${invalid ? 'input-invalid' : ''}`}
+      className={`input num-input ${invalid ? 'input-invalid' : ''} ${className || ''}`}
       value={value ?? ''}
       onChange={onChange}
       onWheel={(e) => e.currentTarget.blur()}
@@ -87,13 +87,13 @@ export function NumInput({ invalid, value, onChange, ...rest }) {
   );
 }
 
-export function Textarea({ invalid, ...rest }) {
-  return <textarea className={`textarea ${invalid ? 'input-invalid' : ''}`} {...rest} />;
+export function Textarea({ invalid, className, ...rest }) {
+  return <textarea className={`textarea ${invalid ? 'input-invalid' : ''} ${className || ''}`} {...rest} />;
 }
 
-export function Select({ options, placeholder, invalid, children, ...rest }) {
+export function Select({ options, placeholder, invalid, children, className, ...rest }) {
   return (
-    <select className={`select ${invalid ? 'input-invalid' : ''}`} {...rest}>
+    <select className={`select ${invalid ? 'input-invalid' : ''} ${className || ''}`} {...rest}>
       {placeholder !== undefined && <option value="">{placeholder}</option>}
       {options
         ? options.map((o) => {

@@ -126,6 +126,9 @@ export const IconFilter = (p) => <S {...p}><path d="M3 5h18l-7 8.5V21l-4-2.5v-5z
 export const IconEye = (p) => (
   <S {...p}><path d="M1.8 12S5.5 5 12 5s10.2 7 10.2 7-3.7 7-10.2 7S1.8 12 1.8 12z" /><circle cx="12" cy="12" r="3.1" /></S>
 );
+export const IconEyeOff = (p) => (
+  <S {...p}><path d="M3 3l18 18M10.6 5.2A10.6 10.6 0 0 1 12 5c6.5 0 10.2 7 10.2 7a17.6 17.6 0 0 1-3.2 4.1M6.5 6.6C3.9 8.3 1.8 12 1.8 12s3.7 7 10.2 7a10 10 0 0 0 3.4-.6" /><path d="M9.5 10a3.1 3.1 0 0 0 4.3 4.4" /></S>
+);
 export const IconHistory = (p) => (
   <S {...p}><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3 9" /><path d="M3 4v5h5M12 7.5V12l3.5 2" /></S>
 );

@@ -4,6 +4,12 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App.jsx';
 import { AuthProvider } from './auth.jsx';
 import { ToastProvider } from './ui/kit.jsx';
+
+// Self-hosted variable fonts — bundled into the build, no external request at
+// runtime. Matters on an office LAN install where internet may not be reliable.
+import '@fontsource-variable/inter';
+import '@fontsource-variable/playfair-display/wght.css';
+import '@fontsource-variable/playfair-display/wght-italic.css';
 import './styles.css';
 
 // Apply the saved theme before first paint so there is no flash.

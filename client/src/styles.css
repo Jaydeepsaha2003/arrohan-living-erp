@@ -42,9 +42,9 @@
   --sidebar-text: #cdc2ba;
   --sidebar-active-bg: #2e2621;
 
-  /* type */
-  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  --font-display: "Georgia", "Times New Roman", serif;
+  /* type — both self-hosted as variable fonts, see main.jsx */
+  --font: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-display: "Playfair Display Variable", "Playfair Display", Georgia, "Times New Roman", serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo, monospace;
 
   --fs-xs: 11px;
@@ -748,16 +748,17 @@ table.tbl.compact th { font-size: 10px; }
 .login-page {
   min-height: 100%;
   display: grid;
-  grid-template-columns: 1fr 460px;
+  grid-template-columns: 1fr 468px;
   background: var(--bg);
 }
+
 .login-art {
   background:
-    radial-gradient(900px 500px at 18% 12%, rgba(200, 98, 58, 0.28), transparent 62%),
-    radial-gradient(700px 620px at 88% 88%, rgba(153, 60, 29, 0.34), transparent 60%),
-    #1a1512;
+    radial-gradient(1000px 560px at 15% 8%, rgba(212, 112, 63, 0.32), transparent 60%),
+    radial-gradient(760px 680px at 92% 92%, rgba(153, 60, 29, 0.38), transparent 58%),
+    linear-gradient(165deg, #1d1712 0%, #17120e 60%, #130f0c 100%);
   color: #fff;
-  padding: var(--s9);
+  padding: var(--s9) var(--s8);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -771,28 +772,110 @@ table.tbl.compact th { font-size: 10px; }
     linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
   background-size: 46px 46px;
-  mask-image: radial-gradient(circle at 30% 40%, black, transparent 78%);
+  mask-image: radial-gradient(circle at 26% 34%, black, transparent 72%);
 }
 .login-art > * { position: relative; z-index: 1; }
-.login-art h1 {
-  font-family: var(--font-display);
-  font-size: var(--fs-3xl);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.15;
-  margin-bottom: var(--s3);
+
+.login-brand-row { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s8); }
+.login-mark {
+  width: 38px; height: 38px; font-size: 20px;
+  box-shadow: 0 4px 16px rgba(153, 60, 29, 0.45);
 }
-.login-art .lede { font-size: var(--fs-md); color: #cabbb2; max-width: 44ch; line-height: 1.65; }
-.login-flow { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s7); }
+.login-brand-name {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.login-headline {
+  font-family: var(--font-display);
+  font-size: 40px;
+  font-weight: 600;
+  font-style: italic;
+  letter-spacing: -0.015em;
+  line-height: 1.16;
+  margin-bottom: var(--s4);
+  max-width: 15ch;
+  animation: login-rise 0.5s var(--ease) both;
+}
+.login-art .lede {
+  font-size: var(--fs-md);
+  color: #cfc1b8;
+  max-width: 46ch;
+  line-height: 1.7;
+  animation: login-rise 0.5s var(--ease) 0.05s both;
+}
+
+.login-highlights {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  margin-top: var(--s6);
+  animation: login-rise 0.5s var(--ease) 0.1s both;
+}
+.login-highlights li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-sm);
+  color: #e4d9d0;
+}
+.login-highlights li svg { color: #e9946a; flex: none; }
+
+.login-flow-label {
+  margin-top: var(--s8);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #9c8d83;
+  animation: login-rise 0.5s var(--ease) 0.15s both;
+}
+.login-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: var(--s3);
+  animation: login-rise 0.5s var(--ease) 0.2s both;
+}
 .login-flow span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--fs-xs);
-  padding: 5px 11px;
+  padding: 5px 12px 5px 6px;
   border-radius: var(--r-full);
-  background: rgba(255, 255, 255, 0.075);
-  border: 1px solid rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   color: #d8ccc5;
   white-space: nowrap;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
 }
+.login-flow span:hover {
+  background: rgba(233, 148, 106, 0.14);
+  border-color: rgba(233, 148, 106, 0.35);
+}
+.login-flow span em {
+  font-style: normal;
+  display: inline-grid;
+  place-items: center;
+  width: 17px; height: 17px;
+  border-radius: 50%;
+  background: rgba(233, 148, 106, 0.22);
+  color: #f3b590;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.login-foot {
+  font-size: var(--fs-xs);
+  color: #7d716a;
+  letter-spacing: 0.02em;
+  animation: login-rise 0.5s var(--ease) 0.25s both;
+}
+
 .login-panel {
   background: var(--surface);
   border-left: 1px solid var(--line);
@@ -801,17 +884,65 @@ table.tbl.compact th { font-size: 10px; }
   flex-direction: column;
   justify-content: center;
 }
-.login-form { width: 100%; max-width: 340px; margin: 0 auto; }
+.login-form { width: 100%; max-width: 360px; margin: 0 auto; animation: login-rise 0.45s var(--ease) 0.1s both; }
+.login-form .eyebrow { margin-bottom: 7px; }
+.login-welcome {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin-bottom: 5px;
+}
+.login-sub { margin-bottom: var(--s6); }
+
+/* Slightly larger than the app's dense default inputs — a sign-in form is a
+   one-off, high-stakes interaction, not a data-entry grid, so it earns
+   friendlier touch targets and a more confident typographic weight. */
+.login-input { height: 44px; font-size: var(--fs-md); border-radius: var(--r); }
+.login-password-field { position: relative; }
+.login-password-field .login-input { padding-right: 42px; }
+.login-password-toggle {
+  position: absolute;
+  right: 4px; top: 50%;
+  transform: translateY(-50%);
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border: none; background: transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color 0.15s var(--ease), background 0.15s var(--ease);
+}
+.login-password-toggle:hover { color: var(--text-2); background: var(--surface-3); }
+
+.login-submit { height: 46px; font-size: var(--fs-md); margin-top: 2px; }
+
+.login-help { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
+.login-help-body { margin-top: 10px; }
+.login-help-body p { margin-bottom: 8px; }
+
+@keyframes login-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
 @media (max-width: 940px) {
   .login-page { grid-template-columns: 1fr; }
   .login-art { padding: var(--s6); }
-  .login-art h1 { font-size: var(--fs-2xl); }
+  .login-headline { font-size: var(--fs-2xl); max-width: none; }
   .login-art .lede { font-size: var(--fs-base); }
+  .login-highlights { margin-top: var(--s5); }
   .login-panel { padding: var(--s6); border-left: none; border-top: 1px solid var(--line); }
+}
+@media (max-width: 480px) {
+  .login-brand-row { margin-bottom: var(--s6); }
+  .login-flow-label, .login-flow { display: none; }
 }
 
 .cred-table { width: 100%; font-size: var(--fs-sm); border-collapse: collapse; }
-.cred-table td { padding: 3px 0; }
+.cred-table tr { cursor: pointer; transition: background 0.12s var(--ease); }
+.cred-table tr:hover { background: var(--surface-3); }
+.cred-table td { padding: 5px 8px; border-radius: var(--r-sm); }
 .cred-table td:first-child { font-family: var(--font-mono); color: var(--text); font-weight: 600; }
 .cred-table td:last-child { color: var(--text-2); text-align: right; }
 
