@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { db, getSetting, setSetting, audit } = require('../db');
+const db = require('../db');
 const a = require('../auth');
 const wf = require('../workflow');
 const { wrap, http, str, num } = require('../lib');
@@ -11,11 +11,11 @@ router.use(a.requireAuth);
 
 router.get(
   '/',
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     res.json({
-      company: getSetting('company'),
-      defaults: getSetting('defaults'),
-      counters: db.prepare('SELECT * FROM doc_counters ORDER BY prefix, fy').all(),
+      company: await db.getSetting('company'),
+      defaults: await db.getSetting('defaults'),
+      counters: await db.all('SELECT * FROM doc_counters ORDER BY prefix, fy'),
       workflow: wf.STAGES.map((s) => ({
         key: s.key, step: s.step, label: s.label, dept: s.dept, roles: s.roles, desc: s.desc,
       })),
@@ -26,10 +26,10 @@ router.get(
 
 router.put(
   '/company',
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     if (!wf.can(req.user, 'settings.write')) throw http(403, 'Only an administrator can change company details.');
     const b = req.body || {};
-    const current = getSetting('company') || {};
+    const current = (await db.getSetting('company')) || {};
     const next = {
       ...current,
       name: str(b.name) || current.name,
@@ -46,18 +46,18 @@ router.put(
       bankIfsc: str(b.bankIfsc) ?? current.bankIfsc,
       website: str(b.website) ?? current.website,
     };
-    setSetting('company', next);
-    audit(req, 'settings.company', 'settings', 'company', null);
+    await db.setSetting('company', next);
+    await db.audit(req, 'settings.company', 'settings', 'company', null);
     res.json({ company: next });
   })
 );
 
 router.put(
   '/defaults',
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     if (!wf.can(req.user, 'settings.write')) throw http(403, 'Only an administrator can change defaults.');
     const b = req.body || {};
-    const current = getSetting('defaults') || {};
+    const current = (await db.getSetting('defaults')) || {};
     const next = {
       ...current,
       gstRate: b.gstRate !== undefined ? num(b.gstRate, 18) : current.gstRate,
@@ -70,8 +70,8 @@ router.put(
       warranty: b.warranty !== undefined ? str(b.warranty) : current.warranty,
       advancePercent: b.advancePercent !== undefined ? num(b.advancePercent, 50) : current.advancePercent,
     };
-    setSetting('defaults', next);
-    audit(req, 'settings.defaults', 'settings', 'defaults', null);
+    await db.setSetting('defaults', next);
+    await db.audit(req, 'settings.defaults', 'settings', 'defaults', null);
     res.json({ defaults: next });
   })
 );

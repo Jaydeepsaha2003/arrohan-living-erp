@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { db } = require('../db');
+const db = require('../db');
 const a = require('../auth');
 const wf = require('../workflow');
 const { wrap, http, str, num, round2, today } = require('../lib');
@@ -43,17 +43,16 @@ report('daily-enquiries', {
     { key: 'status', label: 'Status', type: 'status' },
     { key: 'order_no', label: 'Order no', link: 'order' },
   ],
-  run(req) {
+  async run(req) {
     const { from, to } = range(req);
-    const rows = db
-      .prepare(
-        `SELECT e.*, o.order_no, o.id AS order_id,
-                (SELECT COUNT(*) FROM enquiry_items i WHERE i.enquiry_id = e.id) AS item_count
-         FROM enquiries e LEFT JOIN orders o ON o.id = e.order_id
-         WHERE date(e.enquiry_date) BETWEEN ? AND ?
-         ORDER BY e.enquiry_date DESC, e.id DESC`
-      )
-      .all(from, to);
+    const rows = await db.all(
+      `SELECT e.*, o.order_no, o.id AS order_id,
+              (SELECT COUNT(*) FROM enquiry_items i WHERE i.enquiry_id = e.id) AS item_count
+       FROM enquiries e LEFT JOIN orders o ON o.id = e.order_id
+       WHERE date(e.enquiry_date) BETWEEN ? AND ?
+       ORDER BY e.enquiry_date DESC, e.id DESC`,
+      from, to
+    );
     return {
       rows,
       totals: { expected_budget: sum(rows, 'expected_budget'), item_count: sum(rows, 'item_count') },
@@ -84,25 +83,30 @@ report('enquiry-conversion', {
     { key: 'status', label: 'Outcome', type: 'status' },
     { key: 'lost_reason', label: 'Reason if lost' },
   ],
-  run(req) {
+  async run(req) {
     const { from, to } = range(req);
-    const raw = db
-      .prepare(
-        `SELECT e.*, o.order_no, o.id AS order_id, o.current_stage,
-                COALESCE(inv.grand_total, so.locked_total, q.grand_total, 0) AS order_value
-         FROM enquiries e
-         LEFT JOIN orders o ON o.id = e.order_id
-         LEFT JOIN quotations q ON q.order_id = o.id
-         LEFT JOIN sales_orders so ON so.order_id = o.id
-         LEFT JOIN invoices inv ON inv.order_id = o.id
-         WHERE date(e.enquiry_date) BETWEEN ? AND ?
-         ORDER BY e.id DESC`
-      )
-      .all(from, to);
+    const raw = await db.all(
+      `SELECT e.*, o.order_no, o.id AS order_id, o.current_stage,
+              COALESCE(inv.grand_total, so.locked_total, q.grand_total, 0) AS order_value
+       FROM enquiries e
+       LEFT JOIN orders o ON o.id = e.order_id
+       LEFT JOIN quotations q ON q.order_id = o.id
+       LEFT JOIN sales_orders so ON so.order_id = o.id
+       LEFT JOIN invoices inv ON inv.order_id = o.id
+       WHERE date(e.enquiry_date) BETWEEN ? AND ?
+       ORDER BY e.id DESC`,
+      from, to
+    );
     const rows = raw.map((r) => ({ ...r, stage_now: r.current_stage ? wf.stageLabel(r.current_stage) : '—' }));
     const converted = rows.filter((r) => r.status === 'converted');
     const lost = rows.filter((r) => r.status === 'lost');
     const rate = rows.length ? round2((converted.length / rows.length) * 100) : 0;
+    const breakdownRows = await db.all(
+      `SELECT COALESCE(lost_reason, 'Not recorded') AS label, COUNT(*) AS count
+       FROM enquiries WHERE status = 'lost' AND date(enquiry_date) BETWEEN ? AND ?
+       GROUP BY COALESCE(lost_reason, 'Not recorded') ORDER BY count DESC`,
+      from, to
+    );
     return {
       rows,
       totals: { order_value: sum(rows, 'order_value') },
@@ -113,16 +117,7 @@ report('enquiry-conversion', {
         { label: 'Conversion rate', value: `${rate}%` },
         { label: 'Converted value', value: sum(converted, 'order_value'), type: 'money' },
       ],
-      breakdown: {
-        title: 'Why enquiries were lost',
-        rows: db
-          .prepare(
-            `SELECT COALESCE(lost_reason, 'Not recorded') AS label, COUNT(*) AS count
-             FROM enquiries WHERE status = 'lost' AND date(enquiry_date) BETWEEN ? AND ?
-             GROUP BY COALESCE(lost_reason, 'Not recorded') ORDER BY count DESC`
-          )
-          .all(from, to),
-      },
+      breakdown: { title: 'Why enquiries were lost', rows: breakdownRows },
     };
   },
 });
@@ -143,19 +138,17 @@ report('quotations-pending', {
     { key: 'age_days', label: 'Age (days)', type: 'num' },
     { key: 'expiry', label: 'Validity' },
   ],
-  run() {
-    const rows = db
-      .prepare(
-        `SELECT q.*, o.order_no, o.id AS order_id, e.cust_name,
-                CAST(julianday('now') - julianday(q.quotation_date) AS INTEGER) AS age_days
-         FROM quotations q
-         JOIN orders o ON o.id = q.order_id
-         JOIN enquiries e ON e.id = o.enquiry_id
-         WHERE o.current_stage = 'approval' AND o.status = 'active'
-         ORDER BY q.quotation_date`
-      )
-      .all()
-      .map((r) => ({ ...r, expiry: r.valid_till && r.valid_till < today() ? 'Expired' : 'Valid' }));
+  async run() {
+    const raw = await db.all(
+      `SELECT q.*, o.order_no, o.id AS order_id, e.cust_name,
+              CAST(julianday('now') - julianday(q.quotation_date) AS INTEGER) AS age_days
+       FROM quotations q
+       JOIN orders o ON o.id = q.order_id
+       JOIN enquiries e ON e.id = o.enquiry_id
+       WHERE o.current_stage = 'approval' AND o.status = 'active'
+       ORDER BY q.quotation_date`
+    );
+    const rows = raw.map((r) => ({ ...r, expiry: r.valid_till && r.valid_till < today() ? 'Expired' : 'Valid' }));
     return {
       rows,
       totals: { grand_total: sum(rows, 'grand_total') },
@@ -184,27 +177,25 @@ report('orders-in-production', {
     { key: 'delay_days', label: 'Delay (days)', type: 'num' },
     { key: 'value', label: 'Order value', type: 'money' },
   ],
-  run() {
-    const rows = db
-      .prepare(
-        `SELECT o.id AS order_id, o.order_no, o.current_stage, e.cust_name,
-                p.start_date, p.expected_end_date, pl.delivery_date,
-                COALESCE(so.locked_total, q.grand_total, 0) AS value
-         FROM orders o
-         JOIN enquiries e ON e.id = o.enquiry_id
-         LEFT JOIN productions p ON p.order_id = o.id
-         LEFT JOIN plannings pl ON pl.order_id = o.id
-         LEFT JOIN sales_orders so ON so.order_id = o.id
-         LEFT JOIN quotations q ON q.order_id = o.id
-         WHERE o.status = 'active' AND o.current_stage IN ('store','production','qc')
-         ORDER BY pl.delivery_date`
-      )
-      .all()
-      .map((r) => ({
-        ...r,
-        stage_label: wf.stageLabel(r.current_stage),
-        delay_days: r.delivery_date && r.delivery_date < today() ? daysBetween(r.delivery_date, today()) : 0,
-      }));
+  async run() {
+    const raw = await db.all(
+      `SELECT o.id AS order_id, o.order_no, o.current_stage, e.cust_name,
+              p.start_date, p.expected_end_date, pl.delivery_date,
+              COALESCE(so.locked_total, q.grand_total, 0) AS value
+       FROM orders o
+       JOIN enquiries e ON e.id = o.enquiry_id
+       LEFT JOIN productions p ON p.order_id = o.id
+       LEFT JOIN plannings pl ON pl.order_id = o.id
+       LEFT JOIN sales_orders so ON so.order_id = o.id
+       LEFT JOIN quotations q ON q.order_id = o.id
+       WHERE o.status = 'active' AND o.current_stage IN ('store','production','qc')
+       ORDER BY pl.delivery_date`
+    );
+    const rows = raw.map((r) => ({
+      ...r,
+      stage_label: wf.stageLabel(r.current_stage),
+      delay_days: r.delivery_date && r.delivery_date < today() ? daysBetween(r.delivery_date, today()) : 0,
+    }));
     return {
       rows,
       totals: { value: sum(rows, 'value') },
@@ -231,20 +222,18 @@ report('qc-pending', {
     { key: 'attempt', label: 'Previous attempts', type: 'num' },
     { key: 'rework_note', label: 'Last rework note' },
   ],
-  run() {
-    const rows = db
-      .prepare(
-        `SELECT o.id AS order_id, o.order_no, e.cust_name, p.end_date,
-                COALESCE(qc.attempt, 0) AS attempt, qc.rework_note,
-                CAST(julianday('now') - julianday(p.end_date) AS INTEGER) AS waiting_days
-         FROM orders o
-         JOIN enquiries e ON e.id = o.enquiry_id
-         LEFT JOIN productions p ON p.order_id = o.id
-         LEFT JOIN qc_checks qc ON qc.order_id = o.id
-         WHERE o.status = 'active' AND o.current_stage = 'qc'
-         ORDER BY p.end_date`
-      )
-      .all();
+  async run() {
+    const rows = await db.all(
+      `SELECT o.id AS order_id, o.order_no, e.cust_name, p.end_date,
+              COALESCE(qc.attempt, 0) AS attempt, qc.rework_note,
+              CAST(julianday('now') - julianday(p.end_date) AS INTEGER) AS waiting_days
+       FROM orders o
+       JOIN enquiries e ON e.id = o.enquiry_id
+       LEFT JOIN productions p ON p.order_id = o.id
+       LEFT JOIN qc_checks qc ON qc.order_id = o.id
+       WHERE o.status = 'active' AND o.current_stage = 'qc'
+       ORDER BY p.end_date`
+    );
     return { rows, summary: [{ label: 'Awaiting QC', value: rows.length }] };
   },
 });
@@ -265,21 +254,19 @@ report('ready-for-dispatch', {
     { key: 'delivery_date', label: 'Promised', type: 'date' },
     { key: 'value', label: 'Order value', type: 'money' },
   ],
-  run() {
-    const rows = db
-      .prepare(
-        `SELECT o.id AS order_id, o.order_no, e.cust_name, e.cust_city,
-                pk.packing_date, pk.total_boxes, pk.gross_weight, pl.delivery_date,
-                COALESCE(so.locked_total, 0) AS value
-         FROM orders o
-         JOIN enquiries e ON e.id = o.enquiry_id
-         JOIN packings pk ON pk.order_id = o.id
-         LEFT JOIN plannings pl ON pl.order_id = o.id
-         LEFT JOIN sales_orders so ON so.order_id = o.id
-         WHERE o.status = 'active' AND o.current_stage = 'dispatch'
-         ORDER BY pl.delivery_date`
-      )
-      .all();
+  async run() {
+    const rows = await db.all(
+      `SELECT o.id AS order_id, o.order_no, e.cust_name, e.cust_city,
+              pk.packing_date, pk.total_boxes, pk.gross_weight, pl.delivery_date,
+              COALESCE(so.locked_total, 0) AS value
+       FROM orders o
+       JOIN enquiries e ON e.id = o.enquiry_id
+       JOIN packings pk ON pk.order_id = o.id
+       LEFT JOIN plannings pl ON pl.order_id = o.id
+       LEFT JOIN sales_orders so ON so.order_id = o.id
+       WHERE o.status = 'active' AND o.current_stage = 'dispatch'
+       ORDER BY pl.delivery_date`
+    );
     return {
       rows,
       totals: { total_boxes: sum(rows, 'total_boxes'), value: sum(rows, 'value') },
@@ -310,20 +297,19 @@ report('daily-deliveries', {
     { key: 'invoice_no', label: 'Invoice no' },
     { key: 'gate_pass_no', label: 'Gate pass' },
   ],
-  run(req) {
+  async run(req) {
     const { from, to } = range(req);
-    const rows = db
-      .prepare(
-        `SELECT d.*, o.id AS order_id, o.order_no, e.cust_name, inv.invoice_no, gp.gate_pass_no
-         FROM dispatches d
-         JOIN orders o ON o.id = d.order_id
-         JOIN enquiries e ON e.id = o.enquiry_id
-         LEFT JOIN invoices inv ON inv.order_id = o.id
-         LEFT JOIN gate_passes gp ON gp.order_id = o.id
-         WHERE date(d.dispatch_date) BETWEEN ? AND ?
-         ORDER BY d.dispatch_date DESC, d.order_id DESC`
-      )
-      .all(from, to);
+    const rows = await db.all(
+      `SELECT d.*, o.id AS order_id, o.order_no, e.cust_name, inv.invoice_no, gp.gate_pass_no
+       FROM dispatches d
+       JOIN orders o ON o.id = d.order_id
+       JOIN enquiries e ON e.id = o.enquiry_id
+       LEFT JOIN invoices inv ON inv.order_id = o.id
+       LEFT JOIN gate_passes gp ON gp.order_id = o.id
+       WHERE date(d.dispatch_date) BETWEEN ? AND ?
+       ORDER BY d.dispatch_date DESC, d.order_id DESC`,
+      from, to
+    );
     return {
       rows,
       totals: { boxes: sum(rows, 'boxes') },
@@ -357,20 +343,19 @@ report('sales-register', {
     { key: 'paid', label: 'Received', type: 'money' },
     { key: 'outstanding', label: 'Outstanding', type: 'money' },
   ],
-  run(req) {
+  async run(req) {
     const { from, to } = range(req);
-    const rows = db
-      .prepare(
-        `SELECT inv.*, o.id AS order_id, o.order_no, e.cust_name, e.cust_gstin,
-                (SELECT COALESCE(SUM(amount),0) FROM payments p WHERE p.order_id = o.id) AS paid
-         FROM invoices inv
-         JOIN orders o ON o.id = inv.order_id
-         JOIN enquiries e ON e.id = o.enquiry_id
-         WHERE date(inv.invoice_date) BETWEEN ? AND ?
-         ORDER BY inv.invoice_date DESC, inv.invoice_no DESC`
-      )
-      .all(from, to)
-      .map((r) => ({ ...r, outstanding: round2(Math.max(0, num(r.grand_total) - num(r.paid))) }));
+    const raw = await db.all(
+      `SELECT inv.*, o.id AS order_id, o.order_no, e.cust_name, e.cust_gstin,
+              (SELECT COALESCE(SUM(amount),0) FROM payments p WHERE p.order_id = o.id) AS paid
+       FROM invoices inv
+       JOIN orders o ON o.id = inv.order_id
+       JOIN enquiries e ON e.id = o.enquiry_id
+       WHERE date(inv.invoice_date) BETWEEN ? AND ?
+       ORDER BY inv.invoice_date DESC, inv.invoice_no DESC`,
+      from, to
+    );
+    const rows = raw.map((r) => ({ ...r, outstanding: round2(Math.max(0, num(r.grand_total) - num(r.paid))) }));
     return {
       rows,
       totals: {
@@ -408,22 +393,21 @@ report('outstanding', {
     { key: 'outstanding', label: 'Outstanding', type: 'money' },
     { key: 'stage_label', label: 'Stage' },
   ],
-  run() {
-    const rows = db
-      .prepare(
-        `SELECT o.id AS order_id, o.order_no, o.current_stage, e.cust_name, e.cust_phone,
-                COALESCE(inv.invoice_no, so.so_no) AS ref_no,
-                COALESCE(inv.invoice_date, so.so_date) AS ref_date,
-                COALESCE(inv.grand_total, so.locked_total, 0) AS billed,
-                (SELECT COALESCE(SUM(amount),0) FROM payments p WHERE p.order_id = o.id) AS paid
-         FROM orders o
-         JOIN enquiries e ON e.id = o.enquiry_id
-         LEFT JOIN invoices inv ON inv.order_id = o.id
-         LEFT JOIN sales_orders so ON so.order_id = o.id
-         WHERE o.status <> 'lost' AND COALESCE(inv.grand_total, so.locked_total, 0) > 0
-         ORDER BY COALESCE(inv.invoice_date, so.so_date)`
-      )
-      .all()
+  async run() {
+    const raw = await db.all(
+      `SELECT o.id AS order_id, o.order_no, o.current_stage, e.cust_name, e.cust_phone,
+              COALESCE(inv.invoice_no, so.so_no) AS ref_no,
+              COALESCE(inv.invoice_date, so.so_date) AS ref_date,
+              COALESCE(inv.grand_total, so.locked_total, 0) AS billed,
+              (SELECT COALESCE(SUM(amount),0) FROM payments p WHERE p.order_id = o.id) AS paid
+       FROM orders o
+       JOIN enquiries e ON e.id = o.enquiry_id
+       LEFT JOIN invoices inv ON inv.order_id = o.id
+       LEFT JOIN sales_orders so ON so.order_id = o.id
+       WHERE o.status <> 'lost' AND COALESCE(inv.grand_total, so.locked_total, 0) > 0
+       ORDER BY COALESCE(inv.invoice_date, so.so_date)`
+    );
+    const rows = raw
       .map((r) => ({
         ...r,
         outstanding: round2(num(r.billed) - num(r.paid)),
@@ -463,18 +447,16 @@ report('low-stock', {
     { key: 'standard_rate', label: 'Rate', type: 'money' },
     { key: 'reorder_value', label: 'Reorder value', type: 'money' },
   ],
-  run() {
-    const rows = db
-      .prepare(
-        `SELECT * FROM materials
-         WHERE active = 1 AND ((reorder_level > 0 AND qty_in_stock <= reorder_level) OR qty_in_stock < 0)
-         ORDER BY (qty_in_stock - reorder_level)`
-      )
-      .all()
-      .map((m) => {
-        const shortfall = round2(Math.max(0, num(m.reorder_level) - num(m.qty_in_stock)));
-        return { ...m, shortfall, reorder_value: round2(shortfall * num(m.standard_rate)) };
-      });
+  async run() {
+    const raw = await db.all(
+      `SELECT * FROM materials
+       WHERE active = 1 AND ((reorder_level > 0 AND qty_in_stock <= reorder_level) OR qty_in_stock < 0)
+       ORDER BY (qty_in_stock - reorder_level)`
+    );
+    const rows = raw.map((m) => {
+      const shortfall = round2(Math.max(0, num(m.reorder_level) - num(m.qty_in_stock)));
+      return { ...m, shortfall, reorder_value: round2(shortfall * num(m.standard_rate)) };
+    });
     return {
       rows,
       totals: { reorder_value: sum(rows, 'reorder_value') },
@@ -506,17 +488,15 @@ report('raw-material-stock', {
     { key: 'stock_value', label: 'Value', type: 'money' },
     { key: 'location', label: 'Location' },
   ],
-  run() {
-    const rows = db
-      .prepare(
-        `SELECT m.*,
-                (SELECT COALESCE(SUM(l.qty),0) FROM stock_ledger l WHERE l.material_id = m.id AND l.txn_type IN ('purchase','opening')) AS purchased,
-                (SELECT COALESCE(SUM(-l.qty),0) FROM stock_ledger l WHERE l.material_id = m.id AND l.txn_type IN ('issue','consume')) AS issued,
-                (SELECT COALESCE(SUM(-l.qty),0) FROM stock_ledger l WHERE l.material_id = m.id AND l.txn_type = 'wastage') AS wasted
-         FROM materials m WHERE m.active = 1 ORDER BY m.name`
-      )
-      .all()
-      .map((m) => ({ ...m, stock_value: round2(num(m.qty_in_stock) * num(m.standard_rate)) }));
+  async run() {
+    const raw = await db.all(
+      `SELECT m.*,
+              (SELECT COALESCE(SUM(l.qty),0) FROM stock_ledger l WHERE l.material_id = m.id AND l.txn_type IN ('purchase','opening')) AS purchased,
+              (SELECT COALESCE(SUM(-l.qty),0) FROM stock_ledger l WHERE l.material_id = m.id AND l.txn_type IN ('issue','consume')) AS issued,
+              (SELECT COALESCE(SUM(-l.qty),0) FROM stock_ledger l WHERE l.material_id = m.id AND l.txn_type = 'wastage') AS wasted
+       FROM materials m WHERE m.active = 1 ORDER BY m.name`
+    );
+    const rows = raw.map((m) => ({ ...m, stock_value: round2(num(m.qty_in_stock) * num(m.standard_rate)) }));
     return {
       rows,
       totals: { stock_value: sum(rows, 'stock_value') },
@@ -545,23 +525,21 @@ report('finished-goods', {
     { key: 'dispatched_at', label: 'Dispatched', type: 'date' },
     { key: 'stage_label', label: 'Order stage' },
   ],
-  run(req) {
+  async run(req) {
     const onlyStock = req.query.status !== 'all';
-    const rows = db
-      .prepare(
-        `SELECT fg.*, o.order_no, o.id AS order_id, o.current_stage, e.cust_name
-         FROM finished_goods fg
-         JOIN orders o ON o.id = fg.order_id
-         JOIN enquiries e ON e.id = o.enquiry_id
-         ${onlyStock ? `WHERE fg.status = 'in_stock'` : ''}
-         ORDER BY fg.produced_at DESC, fg.id DESC`
-      )
-      .all()
-      .map((r) => ({
-        ...r,
-        status_label: r.status === 'in_stock' ? 'In factory' : 'Dispatched',
-        stage_label: wf.stageLabel(r.current_stage),
-      }));
+    const raw = await db.all(
+      `SELECT fg.*, o.order_no, o.id AS order_id, o.current_stage, e.cust_name
+       FROM finished_goods fg
+       JOIN orders o ON o.id = fg.order_id
+       JOIN enquiries e ON e.id = o.enquiry_id
+       ${onlyStock ? `WHERE fg.status = 'in_stock'` : ''}
+       ORDER BY fg.produced_at DESC, fg.id DESC`
+    );
+    const rows = raw.map((r) => ({
+      ...r,
+      status_label: r.status === 'in_stock' ? 'In factory' : 'Dispatched',
+      stage_label: wf.stageLabel(r.current_stage),
+    }));
     return {
       rows,
       totals: { qty: sum(rows, 'qty') },
@@ -593,20 +571,23 @@ report('material-consumption', {
     { key: 'unit', label: 'Unit' },
     { key: 'end_date', label: 'Production end', type: 'date' },
   ],
-  run(req) {
+  async run(req) {
     const { from, to } = range(req);
-    const rows = db
-      .prepare(
-        `SELECT c.*, o.order_no, o.id AS order_id, e.cust_name, p.end_date
-         FROM production_consumption c
-         JOIN orders o ON o.id = c.order_id
-         JOIN enquiries e ON e.id = o.enquiry_id
-         LEFT JOIN productions p ON p.order_id = o.id
-         WHERE date(COALESCE(p.end_date, p.start_date, date('now'))) BETWEEN ? AND ?
-         ORDER BY o.id DESC, c.id`
-      )
-      .all(from, to)
-      .map((r) => ({ ...r, variance: round2(num(r.qty_used) - num(r.qty_issued)) }));
+    const raw = await db.all(
+      `SELECT c.*, o.order_no, o.id AS order_id, e.cust_name, p.end_date
+       FROM production_consumption c
+       JOIN orders o ON o.id = c.order_id
+       JOIN enquiries e ON e.id = o.enquiry_id
+       LEFT JOIN productions p ON p.order_id = o.id
+       WHERE date(COALESCE(p.end_date, p.start_date, date('now'))) BETWEEN ? AND ?
+       ORDER BY o.id DESC, c.id`,
+      from, to
+    );
+    const rows = raw.map((r) => ({ ...r, variance: round2(num(r.qty_used) - num(r.qty_issued)) }));
+    const breakdownRows = await db.all(
+      `SELECT c.material AS label, ROUND(SUM(c.qty_used), 2) AS count, c.unit
+       FROM production_consumption c GROUP BY c.material, c.unit ORDER BY SUM(c.qty_used) DESC LIMIT 25`
+    );
     return {
       rows,
       totals: { qty_issued: sum(rows, 'qty_issued'), qty_used: sum(rows, 'qty_used'), variance: sum(rows, 'variance') },
@@ -615,15 +596,7 @@ report('material-consumption', {
         { label: 'Over-consumed lines', value: rows.filter((r) => r.variance > 0).length },
         { label: 'Returned to store', value: rows.filter((r) => r.variance < 0).length },
       ],
-      breakdown: {
-        title: 'Total consumption by material',
-        rows: db
-          .prepare(
-            `SELECT c.material AS label, ROUND(SUM(c.qty_used), 2) AS count, c.unit
-             FROM production_consumption c GROUP BY c.material, c.unit ORDER BY SUM(c.qty_used) DESC LIMIT 25`
-          )
-          .all(),
-      },
+      breakdown: { title: 'Total consumption by material', rows: breakdownRows },
     };
   },
 });
@@ -646,18 +619,24 @@ report('wastage', {
     { key: 'value', label: 'Value lost', type: 'money' },
     { key: 'reason', label: 'Reason' },
   ],
-  run(req) {
+  async run(req) {
     const { from, to } = range(req);
-    const rows = db
-      .prepare(
-        `SELECT w.*, o.order_no, o.id AS order_id, e.cust_name
-         FROM production_wastage w
-         JOIN orders o ON o.id = w.order_id
-         JOIN enquiries e ON e.id = o.enquiry_id
-         WHERE date(w.at) BETWEEN ? AND ?
-         ORDER BY w.id DESC`
-      )
-      .all(from, to);
+    const rows = await db.all(
+      `SELECT w.*, o.order_no, o.id AS order_id, e.cust_name
+       FROM production_wastage w
+       JOIN orders o ON o.id = w.order_id
+       JOIN enquiries e ON e.id = o.enquiry_id
+       WHERE date(w.at) BETWEEN ? AND ?
+       ORDER BY w.id DESC`,
+      from, to
+    );
+    const breakdownRows = await db.all(
+      `SELECT COALESCE(NULLIF(TRIM(reason),''), 'Not recorded') AS label, COUNT(*) AS count,
+              ROUND(SUM(value),2) AS value
+       FROM production_wastage WHERE date(at) BETWEEN ? AND ?
+       GROUP BY COALESCE(NULLIF(TRIM(reason),''), 'Not recorded') ORDER BY SUM(value) DESC`,
+      from, to
+    );
     return {
       rows,
       totals: { qty: sum(rows, 'qty'), value: sum(rows, 'value') },
@@ -666,17 +645,7 @@ report('wastage', {
         { label: 'Value lost', value: sum(rows, 'value'), type: 'money' },
         { label: 'Orders affected', value: new Set(rows.map((r) => r.order_id)).size },
       ],
-      breakdown: {
-        title: 'Wastage by reason',
-        rows: db
-          .prepare(
-            `SELECT COALESCE(NULLIF(TRIM(reason),''), 'Not recorded') AS label, COUNT(*) AS count,
-                    ROUND(SUM(value),2) AS value
-             FROM production_wastage WHERE date(at) BETWEEN ? AND ?
-             GROUP BY COALESCE(NULLIF(TRIM(reason),''), 'Not recorded') ORDER BY SUM(value) DESC`
-          )
-          .all(from, to),
-      },
+      breakdown: { title: 'Wastage by reason', rows: breakdownRows },
     };
   },
 });
@@ -700,31 +669,29 @@ report('production-status', {
     { key: 'order_value', label: 'Order value', type: 'money' },
     { key: 'margin', label: 'Margin', type: 'money' },
   ],
-  run() {
-    const rows = db
-      .prepare(
-        `SELECT o.id AS order_id, o.order_no, o.current_stage, e.cust_name,
-                p.start_date, p.end_date, c.production_days, c.total_cost,
-                qc.result AS qc_result,
-                COALESCE(inv.taxable_amount, pl.subtotal, 0) AS order_value
-         FROM orders o
-         JOIN enquiries e ON e.id = o.enquiry_id
-         LEFT JOIN costings c ON c.order_id = o.id
-         LEFT JOIN plannings pl ON pl.order_id = o.id
-         LEFT JOIN productions p ON p.order_id = o.id
-         LEFT JOIN qc_checks qc ON qc.order_id = o.id
-         LEFT JOIN invoices inv ON inv.order_id = o.id
-         WHERE o.status <> 'lost' AND EXISTS (SELECT 1 FROM store_issues si WHERE si.order_id = o.id)
-         ORDER BY o.id DESC`
-      )
-      .all()
-      .map((r) => ({
-        ...r,
-        stage_label: wf.stageLabel(r.current_stage),
-        days_taken: r.start_date && r.end_date ? daysBetween(r.start_date, r.end_date) : null,
-        margin: round2(num(r.order_value) - num(r.total_cost)),
-        qc_result: r.qc_result ? (r.qc_result === 'pass' ? 'Passed' : 'Failed') : 'Pending',
-      }));
+  async run() {
+    const raw = await db.all(
+      `SELECT o.id AS order_id, o.order_no, o.current_stage, e.cust_name,
+              p.start_date, p.end_date, c.production_days, c.total_cost,
+              qc.result AS qc_result,
+              COALESCE(inv.taxable_amount, pl.subtotal, 0) AS order_value
+       FROM orders o
+       JOIN enquiries e ON e.id = o.enquiry_id
+       LEFT JOIN costings c ON c.order_id = o.id
+       LEFT JOIN plannings pl ON pl.order_id = o.id
+       LEFT JOIN productions p ON p.order_id = o.id
+       LEFT JOIN qc_checks qc ON qc.order_id = o.id
+       LEFT JOIN invoices inv ON inv.order_id = o.id
+       WHERE o.status <> 'lost' AND EXISTS (SELECT 1 FROM store_issues si WHERE si.order_id = o.id)
+       ORDER BY o.id DESC`
+    );
+    const rows = raw.map((r) => ({
+      ...r,
+      stage_label: wf.stageLabel(r.current_stage),
+      days_taken: r.start_date && r.end_date ? daysBetween(r.start_date, r.end_date) : null,
+      margin: round2(num(r.order_value) - num(r.total_cost)),
+      qc_result: r.qc_result ? (r.qc_result === 'pass' ? 'Passed' : 'Failed') : 'Pending',
+    }));
     return {
       rows,
       totals: { total_cost: sum(rows, 'total_cost'), order_value: sum(rows, 'order_value'), margin: sum(rows, 'margin') },
@@ -756,32 +723,30 @@ report('customer-tracking', {
     { key: 'outstanding', label: 'Outstanding', type: 'money' },
     { key: 'status', label: 'Status', type: 'status' },
   ],
-  run() {
-    const rows = db
-      .prepare(
-        `SELECT o.id AS order_id, o.order_no, o.current_stage, o.status, o.created_at,
-                e.enquiry_no, e.cust_name, pl.delivery_date,
-                COALESCE(inv.grand_total, so.locked_total, q.grand_total, 0) AS billed,
-                (SELECT COALESCE(SUM(amount),0) FROM payments p WHERE p.order_id = o.id) AS paid
-         FROM orders o
-         JOIN enquiries e ON e.id = o.enquiry_id
-         LEFT JOIN plannings pl ON pl.order_id = o.id
-         LEFT JOIN quotations q ON q.order_id = o.id
-         LEFT JOIN sales_orders so ON so.order_id = o.id
-         LEFT JOIN invoices inv ON inv.order_id = o.id
-         ORDER BY o.id DESC`
-      )
-      .all()
-      .map((r) => {
-        const idx = wf.stageIndex(r.current_stage);
-        const done = r.status === 'closed' ? wf.STAGE_KEYS.length : Math.max(0, idx);
-        return {
-          ...r,
-          stage_label: wf.stageLabel(r.current_stage),
-          progress: `${done}/${wf.STAGE_KEYS.length}`,
-          outstanding: round2(Math.max(0, num(r.billed) - num(r.paid))),
-        };
-      });
+  async run() {
+    const raw = await db.all(
+      `SELECT o.id AS order_id, o.order_no, o.current_stage, o.status, o.created_at,
+              e.enquiry_no, e.cust_name, pl.delivery_date,
+              COALESCE(inv.grand_total, so.locked_total, q.grand_total, 0) AS billed,
+              (SELECT COALESCE(SUM(amount),0) FROM payments p WHERE p.order_id = o.id) AS paid
+       FROM orders o
+       JOIN enquiries e ON e.id = o.enquiry_id
+       LEFT JOIN plannings pl ON pl.order_id = o.id
+       LEFT JOIN quotations q ON q.order_id = o.id
+       LEFT JOIN sales_orders so ON so.order_id = o.id
+       LEFT JOIN invoices inv ON inv.order_id = o.id
+       ORDER BY o.id DESC`
+    );
+    const rows = raw.map((r) => {
+      const idx = wf.stageIndex(r.current_stage);
+      const done = r.status === 'closed' ? wf.STAGE_KEYS.length : Math.max(0, idx);
+      return {
+        ...r,
+        stage_label: wf.stageLabel(r.current_stage),
+        progress: `${done}/${wf.STAGE_KEYS.length}`,
+        outstanding: round2(Math.max(0, num(r.billed) - num(r.paid))),
+      };
+    });
     return {
       rows,
       totals: { billed: sum(rows, 'billed'), paid: sum(rows, 'paid'), outstanding: sum(rows, 'outstanding') },
@@ -809,24 +774,22 @@ report('customer-ledger', {
     { key: 'outstanding', label: 'Outstanding', type: 'money' },
     { key: 'last_activity', label: 'Last activity', type: 'date' },
   ],
-  run() {
-    const rows = db
-      .prepare(
-        `SELECT e.cust_name,
-                COUNT(DISTINCT o.id) AS orders,
-                COALESCE(SUM(COALESCE(inv.grand_total, so.locked_total, 0)), 0) AS billed,
-                COALESCE(SUM((SELECT COALESCE(SUM(amount),0) FROM payments p WHERE p.order_id = o.id)), 0) AS paid,
-                MAX(COALESCE(inv.invoice_date, so.so_date, o.created_at)) AS last_activity
-         FROM orders o
-         JOIN enquiries e ON e.id = o.enquiry_id
-         LEFT JOIN invoices inv ON inv.order_id = o.id
-         LEFT JOIN sales_orders so ON so.order_id = o.id
-         WHERE o.status <> 'lost'
-         GROUP BY e.cust_name
-         ORDER BY 5 DESC`
-      )
-      .all()
-      .map((r) => ({ ...r, outstanding: round2(num(r.billed) - num(r.paid)) }));
+  async run() {
+    const raw = await db.all(
+      `SELECT e.cust_name,
+              COUNT(DISTINCT o.id) AS orders,
+              COALESCE(SUM(COALESCE(inv.grand_total, so.locked_total, 0)), 0) AS billed,
+              COALESCE(SUM((SELECT COALESCE(SUM(amount),0) FROM payments p WHERE p.order_id = o.id)), 0) AS paid,
+              MAX(COALESCE(inv.invoice_date, so.so_date, o.created_at)) AS last_activity
+       FROM orders o
+       JOIN enquiries e ON e.id = o.enquiry_id
+       LEFT JOIN invoices inv ON inv.order_id = o.id
+       LEFT JOIN sales_orders so ON so.order_id = o.id
+       WHERE o.status <> 'lost'
+       GROUP BY e.cust_name
+       ORDER BY 5 DESC`
+    );
+    const rows = raw.map((r) => ({ ...r, outstanding: round2(num(r.billed) - num(r.paid)) }));
     return {
       rows,
       totals: { billed: sum(rows, 'billed'), paid: sum(rows, 'paid'), outstanding: sum(rows, 'outstanding') },
@@ -856,18 +819,17 @@ report('purchase-register', {
     { key: 'grn_no', label: 'GRN no' },
     { key: 'order_no', label: 'Against order', link: 'order' },
   ],
-  run(req) {
+  async run(req) {
     const { from, to } = range(req);
-    const rows = db
-      .prepare(
-        `SELECT po.*, o.order_no, o.id AS order_id,
-                (SELECT COUNT(*) FROM purchase_order_items i WHERE i.po_id = po.id) AS line_count
-         FROM purchase_orders po
-         LEFT JOIN orders o ON o.id = po.order_id
-         WHERE date(po.po_date) BETWEEN ? AND ?
-         ORDER BY po.po_date DESC, po.id DESC`
-      )
-      .all(from, to);
+    const rows = await db.all(
+      `SELECT po.*, o.order_no, o.id AS order_id,
+              (SELECT COUNT(*) FROM purchase_order_items i WHERE i.po_id = po.id) AS line_count
+       FROM purchase_orders po
+       LEFT JOIN orders o ON o.id = po.order_id
+       WHERE date(po.po_date) BETWEEN ? AND ?
+       ORDER BY po.po_date DESC, po.id DESC`,
+      from, to
+    );
     return {
       rows,
       totals: { subtotal: sum(rows, 'subtotal'), gst_amount: sum(rows, 'gst_amount'), grand_total: sum(rows, 'grand_total') },
@@ -896,18 +858,17 @@ report('stock-ledger', {
     { key: 'remarks', label: 'Remarks' },
     { key: 'user_name', label: 'By' },
   ],
-  run(req) {
+  async run(req) {
     const { from, to } = range(req);
-    const rows = db
-      .prepare(
-        `SELECT l.*, m.name AS material_name, u.full_name AS user_name
-         FROM stock_ledger l
-         JOIN materials m ON m.id = l.material_id
-         LEFT JOIN users u ON u.id = l.user_id
-         WHERE date(l.at) BETWEEN ? AND ?
-         ORDER BY l.id DESC LIMIT 2000`
-      )
-      .all(from, to);
+    const rows = await db.all(
+      `SELECT l.*, m.name AS material_name, u.full_name AS user_name
+       FROM stock_ledger l
+       JOIN materials m ON m.id = l.material_id
+       LEFT JOIN users u ON u.id = l.user_id
+       WHERE date(l.at) BETWEEN ? AND ?
+       ORDER BY l.id DESC LIMIT 2000`,
+      from, to
+    );
     return {
       rows,
       summary: [
@@ -935,18 +896,23 @@ report('lost-enquiries', {
     { key: 'lost_reason_note', label: 'Detail' },
     { key: 'lost_at', label: 'Closed on', type: 'date' },
   ],
-  run(req) {
+  async run(req) {
     const { from, to } = range(req);
-    const rows = db
-      .prepare(
-        `SELECT e.*, e.closed_at AS lost_at, COALESCE(q.grand_total, 0) AS quoted_value
-         FROM enquiries e
-         LEFT JOIN orders o ON o.id = e.order_id
-         LEFT JOIN quotations q ON q.order_id = o.id
-         WHERE e.status = 'lost' AND date(e.enquiry_date) BETWEEN ? AND ?
-         ORDER BY e.closed_at DESC`
-      )
-      .all(from, to);
+    const rows = await db.all(
+      `SELECT e.*, e.closed_at AS lost_at, COALESCE(q.grand_total, 0) AS quoted_value
+       FROM enquiries e
+       LEFT JOIN orders o ON o.id = e.order_id
+       LEFT JOIN quotations q ON q.order_id = o.id
+       WHERE e.status = 'lost' AND date(e.enquiry_date) BETWEEN ? AND ?
+       ORDER BY e.closed_at DESC`,
+      from, to
+    );
+    const breakdownRows = await db.all(
+      `SELECT COALESCE(lost_reason,'Not recorded') AS label, COUNT(*) AS count
+       FROM enquiries WHERE status = 'lost' AND date(enquiry_date) BETWEEN ? AND ?
+       GROUP BY COALESCE(lost_reason,'Not recorded') ORDER BY count DESC`,
+      from, to
+    );
     return {
       rows,
       totals: { expected_budget: sum(rows, 'expected_budget'), quoted_value: sum(rows, 'quoted_value') },
@@ -955,16 +921,7 @@ report('lost-enquiries', {
         { label: 'Value lost (quoted)', value: sum(rows, 'quoted_value'), type: 'money' },
         { label: 'After quotation', value: rows.filter((r) => num(r.quoted_value) > 0).length },
       ],
-      breakdown: {
-        title: 'Reasons ranked',
-        rows: db
-          .prepare(
-            `SELECT COALESCE(lost_reason,'Not recorded') AS label, COUNT(*) AS count
-             FROM enquiries WHERE status = 'lost' AND date(enquiry_date) BETWEEN ? AND ?
-             GROUP BY COALESCE(lost_reason,'Not recorded') ORDER BY count DESC`
-          )
-          .all(from, to),
-      },
+      breakdown: { title: 'Reasons ranked', rows: breakdownRows },
     };
   },
 });
@@ -980,24 +937,24 @@ report('stage-workload', {
     { key: 'value', label: 'Value held', type: 'money' },
     { key: 'oldest_days', label: 'Oldest wait (days)', type: 'num' },
   ],
-  run() {
-    const rows = wf.STAGES.map((s) => {
-      const r = db
-        .prepare(
-          `SELECT COUNT(*) AS count,
-                  COALESCE(SUM(COALESCE(inv.grand_total, so.locked_total, q.grand_total, 0)), 0) AS value,
-                  MAX(CAST(julianday('now') - julianday(
-                    COALESCE((SELECT MAX(h.at) FROM stage_history h WHERE h.order_id = o.id), o.created_at)
-                  ) AS INTEGER)) AS oldest_days
-           FROM orders o
-           LEFT JOIN quotations q ON q.order_id = o.id
-           LEFT JOIN sales_orders so ON so.order_id = o.id
-           LEFT JOIN invoices inv ON inv.order_id = o.id
-           WHERE o.status = 'active' AND o.current_stage = ?`
-        )
-        .get(s.key);
-      return { stage: `${s.step}. ${s.label}`, dept: s.dept, count: r.count, value: round2(r.value), oldest_days: r.oldest_days || 0 };
-    });
+  async run() {
+    const rows = [];
+    for (const s of wf.STAGES) {
+      const r = await db.get(
+        `SELECT COUNT(*) AS count,
+                COALESCE(SUM(COALESCE(inv.grand_total, so.locked_total, q.grand_total, 0)), 0) AS value,
+                MAX(CAST(julianday('now') - julianday(
+                  COALESCE((SELECT MAX(h.at) FROM stage_history h WHERE h.order_id = o.id), o.created_at)
+                ) AS INTEGER)) AS oldest_days
+         FROM orders o
+         LEFT JOIN quotations q ON q.order_id = o.id
+         LEFT JOIN sales_orders so ON so.order_id = o.id
+         LEFT JOIN invoices inv ON inv.order_id = o.id
+         WHERE o.status = 'active' AND o.current_stage = ?`,
+        s.key
+      );
+      rows.push({ stage: `${s.step}. ${s.label}`, dept: s.dept, count: r.count, value: round2(r.value), oldest_days: r.oldest_days || 0 });
+    }
     return {
       rows,
       totals: { count: sum(rows, 'count'), value: sum(rows, 'value') },
@@ -1014,7 +971,7 @@ report('stage-workload', {
 
 router.get(
   '/',
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     res.json({
       reports: Object.entries(REPORTS).map(([key, r]) => ({
         key, title: r.title, group: r.group, desc: r.desc, dated: !!r.dated,
@@ -1025,10 +982,10 @@ router.get(
 
 router.get(
   '/:key',
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     const def = REPORTS[req.params.key];
     if (!def) throw http(404, 'Unknown report.');
-    const out = def.run(req);
+    const out = await def.run(req);
     res.json({
       key: req.params.key,
       title: def.title,
@@ -1049,10 +1006,10 @@ router.get(
 
 router.get(
   '/:key/export.csv',
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     const def = REPORTS[req.params.key];
     if (!def) throw http(404, 'Unknown report.');
-    const out = def.run(req);
+    const out = await def.run(req);
     const cols = def.columns;
     const esc = (v) => {
       if (v == null) return '';
@@ -1080,4 +1037,4 @@ function daysBetween(a, b) {
   return Math.round((new Date(b) - new Date(a)) / 864e5);
 }
 
-module.exports = { router: router, REPORTS };
+module.exports = { router, REPORTS };

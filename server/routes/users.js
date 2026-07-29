@@ -2,7 +2,7 @@
 
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { db, audit } = require('../db');
+const db = require('../db');
 const a = require('../auth');
 const wf = require('../workflow');
 const { wrap, http, str } = require('../lib');
@@ -20,15 +20,13 @@ router.use(a.requireAuth, (req, res, next) => {
 
 router.get(
   '/',
-  wrap((req, res) => {
-    const rows = db
-      .prepare(
-        `SELECT u.id, u.username, u.full_name, u.role, u.email, u.phone, u.active,
-                u.must_change_pw, u.last_login_at, u.created_at,
-                (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.id AND s.expires_at > datetime('now')) AS active_sessions
-         FROM users u ORDER BY u.active DESC, u.role, u.username`
-      )
-      .all();
+  wrap(async (req, res) => {
+    const rows = await db.all(
+      `SELECT u.id, u.username, u.full_name, u.role, u.email, u.phone, u.active,
+              u.must_change_pw, u.last_login_at, u.created_at,
+              (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.id AND s.expires_at > datetime('now')) AS active_sessions
+       FROM users u ORDER BY u.active DESC, u.role, u.username`
+    );
     res.json({
       users: rows.map((u) => ({
         ...shapeUser(u),
@@ -43,18 +41,18 @@ router.get(
 
 router.post(
   '/',
-  wrap((req, res) => {
-    const user = a.createUser(req.body, req.user.id);
-    audit(req, 'user.create', 'user', user.id, { username: user.username, role: user.role });
+  wrap(async (req, res) => {
+    const user = await a.createUser(req.body, req.user.id);
+    await db.audit(req, 'user.create', 'user', user.id, { username: user.username, role: user.role });
     res.status(201).json({ user: shapeUser(user) });
   })
 );
 
 router.patch(
   '/:id',
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     const id = Number(req.params.id);
-    const target = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+    const target = await db.get('SELECT * FROM users WHERE id = ?', id);
     if (!target) throw http(404, 'User not found.');
 
     const sets = [];
@@ -68,7 +66,7 @@ router.patch(
     }
     if (req.body.role !== undefined) {
       if (!wf.ROLE_KEYS.includes(req.body.role)) throw http(400, 'Unknown role.');
-      if (target.role === 'admin' && req.body.role !== 'admin' && countAdmins() <= 1) {
+      if (target.role === 'admin' && req.body.role !== 'admin' && (await countAdmins()) <= 1) {
         throw http(400, 'You cannot change the role of the last administrator.');
       }
       sets.push('role = ?');
@@ -86,54 +84,54 @@ router.patch(
       const active = req.body.active ? 1 : 0;
       if (!active) {
         if (target.id === req.user.id) throw http(400, 'You cannot deactivate your own account.');
-        if (target.role === 'admin' && countAdmins() <= 1) {
+        if (target.role === 'admin' && (await countAdmins()) <= 1) {
           throw http(400, 'You cannot deactivate the last administrator.');
         }
       }
       sets.push('active = ?');
       vals.push(active);
-      if (!active) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+      if (!active) await db.run('DELETE FROM sessions WHERE user_id = ?', id);
     }
 
     if (sets.length) {
-      db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
-      audit(req, 'user.update', 'user', id, req.body);
+      await db.run(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, ...vals, id);
+      await db.audit(req, 'user.update', 'user', id, req.body);
     }
-    res.json({ user: shapeUser(db.prepare(a.SELECT_USER).get(id)) });
+    res.json({ user: shapeUser(await db.get(a.SELECT_USER, id)) });
   })
 );
 
 router.post(
   '/:id/reset-password',
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     const id = Number(req.params.id);
     const pw = String(req.body.password || '');
     if (pw.length < 6) throw http(400, 'Password must be at least 6 characters.');
-    const target = db.prepare('SELECT id FROM users WHERE id = ?').get(id);
+    const target = await db.get('SELECT id FROM users WHERE id = ?', id);
     if (!target) throw http(404, 'User not found.');
-    db.prepare('UPDATE users SET password_hash = ?, must_change_pw = 1 WHERE id = ?').run(
+    await db.run(
+      'UPDATE users SET password_hash = ?, must_change_pw = 1 WHERE id = ?',
       bcrypt.hashSync(pw, 10),
       id
     );
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
-    audit(req, 'user.password.reset', 'user', id, null);
+    await db.run('DELETE FROM sessions WHERE user_id = ?', id);
+    await db.audit(req, 'user.password.reset', 'user', id, null);
     res.json({ ok: true });
   })
 );
 
 router.get(
   '/audit',
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 200, 1000);
-    const rows = db
-      .prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT ?')
-      .all(limit);
+    const rows = await db.all('SELECT * FROM audit_log ORDER BY id DESC LIMIT ?', limit);
     res.json({ entries: rows });
   })
 );
 
-function countAdmins() {
-  return db.prepare(`SELECT COUNT(*) n FROM users WHERE role = 'admin' AND active = 1`).get().n;
+async function countAdmins() {
+  const row = await db.get(`SELECT COUNT(*) n FROM users WHERE role = 'admin' AND active = 1`);
+  return row.n;
 }
 
 module.exports = router;

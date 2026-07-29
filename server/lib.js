@@ -1,6 +1,6 @@
 'use strict';
 
-const { db } = require('./db');
+const db = require('./db');
 
 // ------------------------------------------------------------------- utilities
 
@@ -53,15 +53,12 @@ function http(status, message) {
   return e;
 }
 
-/** Wraps an async route so thrown errors reach the error middleware. */
+/** Wraps an async route so a rejected promise reaches the error middleware. */
 function wrap(fn) {
   return (req, res, next) => {
-    try {
-      const out = fn(req, res, next);
-      if (out && typeof out.catch === 'function') out.catch(next);
-    } catch (e) {
-      next(e);
-    }
+    Promise.resolve()
+      .then(() => fn(req, res, next))
+      .catch(next);
   };
 }
 
@@ -72,37 +69,38 @@ function wrap(fn) {
  * Keeping this lenient means production/store staff can type a material that
  * the store master has not caught up with yet, and inventory still tracks it.
  */
-function resolveMaterial({ material_id, material, unit, rate }) {
+async function resolveMaterial({ material_id, material, unit, rate }) {
   if (material_id) {
-    const row = db.prepare('SELECT * FROM materials WHERE id = ?').get(material_id);
+    const row = await db.get('SELECT * FROM materials WHERE id = ?', material_id);
     if (row) return row;
   }
   const name = str(material);
   if (!name) return null;
-  const found = db.prepare('SELECT * FROM materials WHERE lower(trim(name)) = lower(trim(?))').get(name);
+  const found = await db.get('SELECT * FROM materials WHERE lower(trim(name)) = lower(trim(?))', name);
   if (found) return found;
-  const info = db
-    .prepare(
-      `INSERT INTO materials (name, unit, qty_in_stock, reorder_level, standard_rate, category)
-       VALUES (?, ?, 0, 0, ?, 'Auto-created')`
-    )
-    .run(name, str(unit) || 'nos', num(rate));
-  return db.prepare('SELECT * FROM materials WHERE id = ?').get(info.lastInsertRowid);
+  const info = await db.run(
+    `INSERT INTO materials (name, unit, qty_in_stock, reorder_level, standard_rate, category)
+     VALUES (?, ?, 0, 0, ?, 'Auto-created')`,
+    name,
+    str(unit) || 'nos',
+    num(rate)
+  );
+  return db.get('SELECT * FROM materials WHERE id = ?', info.lastInsertRowid);
 }
 
 /**
- * Post a stock movement and update the material balance in one shot.
+ * Post a stock movement and update the material balance together.
  * qty is signed: positive = receipt, negative = issue/consume/wastage.
+ * Always called inside a transaction, so the balance and the ledger cannot drift.
  */
-function postStock({ material_id, qty, unit, rate, txn_type, ref_table, ref_id, order_no, remarks, user_id }) {
-  const mat = db.prepare('SELECT * FROM materials WHERE id = ?').get(material_id);
+async function postStock({ material_id, qty, unit, rate, txn_type, ref_table, ref_id, order_no, remarks, user_id }) {
+  const mat = await db.get('SELECT * FROM materials WHERE id = ?', material_id);
   if (!mat) throw http(400, 'Unknown material in stock movement.');
   const balance = round2(num(mat.qty_in_stock) + num(qty));
-  db.prepare('UPDATE materials SET qty_in_stock = ? WHERE id = ?').run(balance, material_id);
-  db.prepare(
+  await db.run('UPDATE materials SET qty_in_stock = ? WHERE id = ?', balance, material_id);
+  await db.run(
     `INSERT INTO stock_ledger (material_id, qty, unit, rate, balance_after, txn_type, ref_table, ref_id, order_no, remarks, user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     material_id,
     round2(qty),
     str(unit) || mat.unit,
@@ -139,38 +137,43 @@ const ORDER_SELECT = `
 `;
 
 function getOrder(id) {
-  return db.prepare(`${ORDER_SELECT} WHERE o.id = ?`).get(id);
+  return db.get(`${ORDER_SELECT} WHERE o.id = ?`, id);
 }
 
 function orderItems(orderId) {
-  return db
-    .prepare(
-      `SELECT ei.* FROM enquiry_items ei
-       JOIN orders o ON o.enquiry_id = ei.enquiry_id
-       WHERE o.id = ? ORDER BY ei.seq, ei.id`
-    )
-    .all(orderId);
+  return db.all(
+    `SELECT ei.* FROM enquiry_items ei
+     JOIN orders o ON o.enquiry_id = ei.enquiry_id
+     WHERE o.id = ? ORDER BY ei.seq, ei.id`,
+    orderId
+  );
 }
 
 function logStage(orderId, stage, action, user, note) {
-  db.prepare(
+  return db.run(
     `INSERT INTO stage_history (order_id, stage, action, user_id, username, note)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(orderId, stage, action, user ? user.id : null, user ? user.username : null, note || null);
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    orderId,
+    stage,
+    action,
+    user ? user.id : null,
+    user ? user.username : null,
+    note || null
+  );
 }
 
 /** Billed (invoice total, else locked SO total) vs received, for one order. */
-function billingFor(orderId) {
-  return db
-    .prepare(
-      `SELECT COALESCE(inv.grand_total, so.locked_total, 0) AS billed,
-              (SELECT COALESCE(SUM(amount),0) FROM payments p WHERE p.order_id = o.id) AS paid
-       FROM orders o
-       LEFT JOIN invoices inv ON inv.order_id = o.id
-       LEFT JOIN sales_orders so ON so.order_id = o.id
-       WHERE o.id = ?`
-    )
-    .get(orderId) || { billed: 0, paid: 0 };
+async function billingFor(orderId) {
+  const row = await db.get(
+    `SELECT COALESCE(inv.grand_total, so.locked_total, 0) AS billed,
+            (SELECT COALESCE(SUM(amount),0) FROM payments p WHERE p.order_id = o.id) AS paid
+     FROM orders o
+     LEFT JOIN invoices inv ON inv.order_id = o.id
+     LEFT JOIN sales_orders so ON so.order_id = o.id
+     WHERE o.id = ?`,
+    orderId
+  );
+  return row || { billed: 0, paid: 0 };
 }
 
 module.exports = {

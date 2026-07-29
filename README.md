@@ -7,15 +7,25 @@ current one has been completed and approved by the department that owns it — t
 is enforced on the server, so it holds even if someone calls the API directly.
 
 - **Multi-user login** with one account per department and role-based access
-- **SQLite database** — a single file, no separate database server to install
+- **SQLite database** (via [libSQL](https://turso.tech/libsql)) — same engine, same SQL, runs as a
+  local file on an office PC or as a hosted database reachable from Vercel
 - **15-step workflow** from enquiry to gate pass, exactly as specified
 - **Automatic inventory** — stock moves as material is issued, consumed, wasted and purchased
 - **21 reports** plus a live dashboard, all exportable to CSV
 - **12 printable documents** on your company letterhead
 
+Runs two ways — pick one:
+
+| | Office install | Vercel + Turso |
+|---|---|---|
+| **Database** | A file on that PC (`data/arrohan.db`) | Hosted SQLite, reachable from anywhere |
+| **Cost** | Free | Free tier covers this comfortably |
+| **Setup** | `npm run setup && npm start` | See [§8 Deploying to Vercel](#8-deploying-to-vercel-turso) |
+| **Best for** | One office, one machine always on | Access from anywhere, no PC to keep running |
+
 ---
 
-## 1. Getting started
+## 1. Getting started (office install)
 
 You need [Node.js 20 or newer](https://nodejs.org). Check with `node -v`.
 
@@ -246,14 +256,18 @@ so the address does not change.
 ### Back up
 
 Everything lives in one folder: **`data/`**. Copy it while the server is stopped, or
-use SQLite's backup command while it runs:
+copy just the database file while it runs:
 
 ```bash
-node -e "const D=require('better-sqlite3');new D('data/arrohan.db').backup('backup-'+new Date().toISOString().slice(0,10)+'.db').then(()=>console.log('done'))"
+node -e "const c=require('@libsql/client').createClient({url:'file:./data/arrohan.db'});c.execute('VACUUM INTO ?', ['./backup-'+new Date().toISOString().slice(0,10)+'.db']).then(()=>console.log('done'))"
 ```
 
 Copy the backup to a pen drive or cloud folder. Do this **daily** — it is the only
 copy of your business records.
+
+(Running on Vercel + Turso instead? See [§8.6](#86-local-development-against-the-same-turso-database) —
+use `turso db dump arrohan-erp > backup.sql` instead; Turso also keeps its own
+point-in-time backups on the free tier.)
 
 <a id="forgotten-password"></a>
 ### Forgotten password
@@ -285,16 +299,125 @@ npm run reset-password admin NewPassword123
 | `npm run reset-db -- --all` | Delete the database completely and start fresh |
 | `npm run reset-password` | Recover a forgotten password |
 | `npm run smoke` | Run the automated workflow test (97 checks) |
+| `npm run turso:setup` | Check a Turso connection and print setup steps |
 
 ---
 
-## 8. How it is built
+## 8. Deploying to Vercel + Turso
+
+Vercel runs your code as short-lived functions with **no persistent disk** — a SQLite
+file written there is wiped between requests. [Turso](https://turso.tech) solves this by
+hosting the same SQLite engine as a small always-on service your Vercel functions talk
+to over the network. The database code in this project (`@libsql/client`) already
+speaks both: a local file when you run it on your own PC, or a Turso URL when deployed.
+Nothing else changes — same SQL, same schema, same workflow rules.
+
+### 8.1 Create the database (about two minutes)
+
+```bash
+curl -sSfL https://get.tur.so/install.sh | bash
+turso auth login
+turso db create arrohan-erp --location bom
+turso db show arrohan-erp --url
+turso db tokens create arrohan-erp
+```
+
+(On Windows, run those inside WSL, or download the CLI release directly from the
+[turso-cli releases page](https://github.com/tursodatabase/turso-cli/releases).)
+
+That gives you two values: a `libsql://...` URL and a long auth token. Check they work:
+
+```bash
+TURSO_DATABASE_URL=libsql://arrohan-erp-<you>.turso.io TURSO_AUTH_TOKEN=<token> npm run turso:setup
+```
+
+### 8.2 Push the code and import to Vercel
+
+```bash
+git push
+```
+
+Then on [vercel.com](https://vercel.com): **Add New → Project**, import this repository.
+Vercel reads `vercel.json`, which is already set up to build the client, run the API as
+a serverless function, and serve everything from one domain. You don't need to change
+any project settings.
+
+### 8.3 Set the environment variables
+
+In the Vercel project → **Settings → Environment Variables**, add:
+
+| Variable | Value |
+| -------- | ----- |
+| `TURSO_DATABASE_URL` | the `libsql://...` URL from step 8.1 |
+| `TURSO_AUTH_TOKEN` | the token from step 8.1 |
+
+Deploy (or redeploy if it already ran once without these set).
+
+### 8.4 First sign-in
+
+The first request creates every table and one login per department automatically —
+there's no server console to read the passwords from, so **check the deployment's
+function logs** (Vercel dashboard → your project → the deployment → **Logs**) right
+after the first visit. They are printed once, the same way they would be in a terminal,
+for example:
 
 ```
+Created the following logins:
+  admin        brisk-lake-4827      System Administrator
+  sales        cedar-vault-6402     Sales Department
+  ...
+This is a hosted database with no writable disk — copy these now, they are not saved anywhere.
+```
+
+Copy them immediately — unlike the office install, there is no `data/FIRST-RUN-LOGINS.txt`
+to come back to later, since Vercel has no writable disk to save it on. If you miss them,
+recover any account with:
+
+```bash
+TURSO_DATABASE_URL=... TURSO_AUTH_TOKEN=... npm run reset-password admin NewPassword123
+```
+
+### 8.5 Your company details
+
+`config/company.json` is not committed to git (see [§9](#9-how-it-is-built)), so a
+Vercel deployment starts with placeholder company details. Either add real values to
+`config/company.json` before pushing (fine for a private repo you control), or just set
+them once signed in, under **Settings → Company & letterhead** — they save straight to
+the database and print correctly from then on.
+
+### 8.6 Local development against the same Turso database
+
+Handy for testing before you push:
+
+```bash
+TURSO_DATABASE_URL=libsql://arrohan-erp-<you>.turso.io TURSO_AUTH_TOKEN=<token> npm start
+```
+
+Omit both variables (the normal `npm start`) and it uses a local file in `data/` instead
+— the two never mix by accident.
+
+### What doesn't apply on Vercel
+
+`npm run reset-db -- --all` refuses to run against a hosted database (deleting the file
+makes no sense for one) — use `turso db destroy arrohan-erp` instead, or open the Turso
+dashboard. Backups work differently too: `turso db dump arrohan-erp > backup.sql`
+instead of copying the `data/` folder.
+
+---
+
+## 9. How it is built
+
+```
+api/
+  index.js       Vercel serverless entry — just re-exports server/app.js
+vercel.json      Build, routing and function config for a Vercel deployment
 server/
-  index.js       Express app, serves the API and the built interface on one port
+  app.js         Builds the Express app (routes, static files, error handling) —
+                 shared by the standalone server and the Vercel function
+  index.js       Standalone entry point: awaits app.js, then listens on a port
   schema.sql     Full database structure
-  db.js          SQLite connection, transactions, document numbering
+  db.js          libSQL connection (local file or hosted Turso), transactions,
+                 document numbering — every call is async
   workflow.js    The 14 stages, roles and permissions — the single source of truth
   stages.js      One handler per stage: validation, calculations, stock movement
   auth.js        Password hashing, sessions, permission guards
@@ -309,18 +432,23 @@ client/
     ui/          Design system: buttons, tables, charts, modals, toasts
     pages/       Dashboard · Enquiries · Orders · Order pipeline · 14 stage forms · Inventory · Purchase · Masters · Reports · Users · Settings
     docs/        The 12 printable documents
+config/
+  company.example.json   Template — copy to company.json and fill in your own
 data/
-  arrohan.db     Your database — this is the file to back up
+  arrohan.db     Your database when running locally — back this up
+  FIRST-RUN-LOGINS.txt   Generated passwords, local installs only
 scripts/
   smoke.js       End-to-end workflow test
   demo-data.js   Sample data loader
   reset-password.js
+  turso-setup.js Checks a Turso connection and prints setup steps
 ```
 
-**Stack:** Node.js · Express · better-sqlite3 · React 18 · Vite. No cloud service, no
-subscription, no external database. Passwords are hashed with bcrypt; sessions are
-HTTP-only cookies. Document numbers are issued by the database, so two people saving
-at the same moment can never receive the same number.
+**Stack:** Node.js · Express · [libSQL](https://turso.tech/libsql) (SQLite, local file
+or hosted) · React 18 · Vite. Passwords are hashed with bcrypt; sessions are HTTP-only
+cookies. Document numbers are issued by the database with an atomic `UPDATE ...
+RETURNING`, so two people saving at the same moment — or two different Vercel function
+instances — can never receive the same number.
 
 **Notes on the design.** Money is stored as numbers and rounded to two decimals at
 every calculation. Stock is never overwritten — each change is a signed ledger entry
@@ -331,7 +459,7 @@ double-counted.
 
 ---
 
-## 9. Things worth knowing
+## 10. Things worth knowing
 
 **Costing BOM quantities cover the whole line, not one unit.** For an order of 8
 wardrobes, enter the plywood needed for all 8 — that is what the store will issue.

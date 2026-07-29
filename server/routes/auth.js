@@ -3,7 +3,7 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
-const { db, audit, getSetting } = require('../db');
+const db = require('../db');
 const a = require('../auth');
 const wf = require('../workflow');
 const { wrap, http, str } = require('../lib');
@@ -27,34 +27,34 @@ const loginLimiter = rateLimit({
 router.post(
   '/login',
   loginLimiter,
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     const username = str(req.body.username);
     const password = String(req.body.password || '');
     if (!username || !password) throw http(400, 'Enter your username and password.');
 
-    const user = a.findUserByUsername(username);
+    const user = await a.findUserByUsername(username);
     if (!user || !a.verifyPassword(password, user.password_hash)) {
-      audit({ user: null }, 'login.failed', 'user', null, { username });
+      await db.audit({ user: null }, 'login.failed', 'user', null, { username });
       throw http(401, 'Incorrect username or password.');
     }
     if (!user.active) throw http(403, 'This account has been deactivated. Contact your administrator.');
 
-    a.purgeExpiredSessions();
-    const { token, expires } = a.createSession(user.id, req);
-    db.prepare(`UPDATE users SET last_login_at = datetime('now') WHERE id = ?`).run(user.id);
+    await a.purgeExpiredSessions();
+    const { token, expires } = await a.createSession(user.id, req);
+    await db.run(`UPDATE users SET last_login_at = datetime('now') WHERE id = ?`, user.id);
     a.setSessionCookie(res, token, expires);
 
-    const fresh = db.prepare(a.SELECT_USER).get(user.id);
-    audit({ user: fresh }, 'login', 'user', user.id, null);
+    const fresh = await db.get(a.SELECT_USER, user.id);
+    await db.audit({ user: fresh }, 'login', 'user', user.id, null);
     res.json({ user: shapeUser(fresh) });
   })
 );
 
 router.post(
   '/logout',
-  wrap((req, res) => {
-    if (req.user) audit(req, 'logout', 'user', req.user.id, null);
-    a.destroySession(req.sessionToken);
+  wrap(async (req, res) => {
+    if (req.user) await db.audit(req, 'logout', 'user', req.user.id, null);
+    await a.destroySession(req.sessionToken);
     a.clearSessionCookie(res);
     res.json({ ok: true });
   })
@@ -63,11 +63,11 @@ router.post(
 /** Bootstrap payload: current user plus everything the UI needs to render. */
 router.get(
   '/me',
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     if (!req.user) return res.status(401).json({ error: 'Not signed in.' });
     res.json({
       user: shapeUser(req.user),
-      company: getSetting('company'),
+      company: await db.getSetting('company'),
       meta: {
         stages: wf.STAGES.map((s) => ({
           key: s.key,
@@ -98,19 +98,20 @@ router.get(
 router.post(
   '/change-password',
   a.requireAuth,
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     const current = String(req.body.currentPassword || '');
     const next = String(req.body.newPassword || '');
     if (next.length < 6) throw http(400, 'New password must be at least 6 characters.');
-    const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
+    const row = await db.get('SELECT password_hash FROM users WHERE id = ?', req.user.id);
     if (!a.verifyPassword(current, row.password_hash)) throw http(400, 'Your current password is incorrect.');
-    db.prepare('UPDATE users SET password_hash = ?, must_change_pw = 0 WHERE id = ?').run(
+    await db.run(
+      'UPDATE users SET password_hash = ?, must_change_pw = 0 WHERE id = ?',
       bcrypt.hashSync(next, 10),
       req.user.id
     );
     // Sign out every other device for this user.
-    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token <> ?').run(req.user.id, req.sessionToken);
-    audit(req, 'password.change', 'user', req.user.id, null);
+    await db.run('DELETE FROM sessions WHERE user_id = ? AND token <> ?', req.user.id, req.sessionToken);
+    await db.audit(req, 'password.change', 'user', req.user.id, null);
     res.json({ ok: true });
   })
 );

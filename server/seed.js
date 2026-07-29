@@ -8,20 +8,21 @@
  * config/company.example.json and fill in your own. Everything can also be
  * edited later in the app under Settings.
  *
- * Passwords are generated at random, one per account, and written to
- * data/FIRST-RUN-LOGINS.txt so nothing sensitive lives in this repository.
- * Set ARROHAN_SEED_PASSWORD to use one known password instead (handy for
- * development and for the automated tests).
+ * Passwords are generated at random, one per account. On a local install they
+ * are written to data/FIRST-RUN-LOGINS.txt so nothing sensitive lives in this
+ * repository; on a serverless deployment (no writable disk) they are only
+ * printed to the function log instead. Set ARROHAN_SEED_PASSWORD to use one
+ * known password for every account (handy for development and for tests).
  */
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { db, migrate, getSetting, setSetting, DATA_DIR } = require('./db');
+const db = require('./db');
 const { hashPassword, findUserByUsername } = require('./auth');
 
 const CONFIG_DIR = path.join(__dirname, '..', 'config');
-const LOGINS_FILE = path.join(DATA_DIR, 'FIRST-RUN-LOGINS.txt');
+const LOGINS_FILE = db.isRemote ? null : path.join(db.DATA_DIR, 'FIRST-RUN-LOGINS.txt');
 
 const FALLBACK_COMPANY = {
   name: 'YOUR COMPANY NAME PVT LTD',
@@ -99,26 +100,26 @@ function generatePassword() {
   return `${a}-${b}-${crypto.randomInt(1000, 10000)}`;
 }
 
-function seed({ quiet = false } = {}) {
-  migrate();
+async function seed({ quiet = false } = {}) {
+  await db.migrate();
 
-  if (!getSetting('company')) setSetting('company', loadCompany());
-  if (!getSetting('defaults')) setSetting('defaults', DEFAULTS);
+  if (!(await db.getSetting('company'))) await db.setSetting('company', loadCompany());
+  if (!(await db.getSetting('defaults'))) await db.setSetting('defaults', DEFAULTS);
 
   const shared = process.env.ARROHAN_SEED_PASSWORD || null;
   const created = [];
-  const ins = db.prepare(
-    `INSERT INTO users (username, full_name, password_hash, role, must_change_pw) VALUES (?, ?, ?, ?, 1)`
-  );
 
   for (const u of USERS) {
-    if (findUserByUsername(u.username)) continue;
+    if (await findUserByUsername(u.username)) continue;
     const password = shared || generatePassword();
-    ins.run(u.username, u.full_name, hashPassword(password), u.role);
+    await db.run(
+      `INSERT INTO users (username, full_name, password_hash, role, must_change_pw) VALUES (?, ?, ?, ?, 1)`,
+      u.username, u.full_name, hashPassword(password), u.role
+    );
     created.push({ ...u, password });
   }
 
-  if (created.length && !shared) writeLoginsFile(created);
+  if (created.length && !shared && LOGINS_FILE) writeLoginsFile(created);
 
   if (!quiet) {
     if (created.length) {
@@ -127,7 +128,8 @@ function seed({ quiet = false } = {}) {
       for (const u of created) {
         console.log(`  ${u.username.padEnd(w)}  ${u.password.padEnd(20)}  ${u.full_name}`);
       }
-      if (!shared) console.log(`\nAlso saved to ${LOGINS_FILE}`);
+      if (LOGINS_FILE && !shared) console.log(`\nAlso saved to ${LOGINS_FILE}`);
+      else if (!shared) console.log('\nThis is a hosted database with no writable disk — copy these now, they are not saved anywhere.');
       console.log('Each account is asked to choose its own password at first sign-in.\n');
     } else {
       console.log('All department logins already exist — nothing to seed.');
@@ -165,8 +167,7 @@ function writeLoginsFile(created) {
 }
 
 if (require.main === module) {
-  seed();
-  console.log('Seed complete.');
+  seed().then(() => console.log('Seed complete.'));
 }
 
 module.exports = { seed, loadCompany, DEFAULTS, USERS, LOGINS_FILE };

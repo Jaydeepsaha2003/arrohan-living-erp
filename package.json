@@ -15,11 +15,12 @@
     "reset-db": "node server/reset.js",
     "smoke": "node scripts/smoke.js",
     "reset-password": "node scripts/reset-password.js",
-    "demo-data": "node scripts/demo-data.js"
+    "demo-data": "node scripts/demo-data.js",
+    "turso:setup": "node scripts/turso-setup.js"
   },
   "dependencies": {
+    "@libsql/client": "^0.17.4",
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "^11.5.0",
     "compression": "^1.7.4",
     "cookie-parser": "^1.4.6",
     "express": "^4.21.1",
