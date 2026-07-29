@@ -1,0 +1,17 @@
+{
+  "_comment": "Copy this file to config/company.json and fill in your own details. config/company.json is git-ignored, so your GSTIN, PAN and address never reach the repository. You can also edit all of this later in the app under Settings.",
+
+  "name": "YOUR COMPANY NAME PVT LTD",
+  "address": "Street address line",
+  "city": "City",
+  "state": "State",
+  "pincode": "000000",
+  "mobile": "",
+  "email": "",
+  "gstin": "",
+  "pan": "",
+  "bankName": "",
+  "bankAccount": "",
+  "bankIfsc": "",
+  "website": ""
+}
